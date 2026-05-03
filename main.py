@@ -28,7 +28,7 @@ Please enter the number corresponding to your choice: """)
         else:
             print("Invalid input. Please enter a valid index.")
 
-    movie = pd.read_json("dataset/test.jsonl", lines=True)
+    movie = pd.read_json("datasett/test.jsonl", lines=True)
     movie = preprocess_text(movie["summary"][int(movie_index)])
     movie = pd.Series(movie)
     df = pd.concat([df, movie], keys=['original', 'new'])
