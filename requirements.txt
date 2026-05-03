@@ -1,0 +1,7 @@
+spacy
+pandas
+scikit-learn
+fsspec
+huggingface_hub
+keybert 
+sentence-transformers
