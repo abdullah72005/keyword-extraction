@@ -11,13 +11,15 @@ def extract_keywords(text, top_n=10):
     # We use the model to extract keywords from the document.
     # top_n specifies how many keywords we want to extract.
     keywords = kw_model.extract_keywords(
-    text, 
-    stop_words='english', 
-    top_n=top_n
-)
+        text,
+        stop_words='english',
+        top_n=top_n,
+    )
     
     # Human-readable printing
     print(f"{'Keyword':<20} | {'Score':<10}")
     print("-" * 32)
     for word, score in keywords:
         print(f"{word:<20} | {score:.4f}")
+
+    return keywords

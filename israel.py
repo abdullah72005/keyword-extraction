@@ -1,7 +1,7 @@
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-def vectorize_documents(documents):
+def vectorize_documents(documents, top_n=10):
     vectorizer = TfidfVectorizer()
     tfidf_matrix = vectorizer.fit_transform(documents)
 
@@ -15,7 +15,11 @@ def vectorize_documents(documents):
     scores = {feature_names[i]: first_doc_vector[0, i] for i in first_doc_vector.indices}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
+    top_items = sorted_scores[:top_n]
+
     print(f"{'Keyword':<20} | {'Score':<10}")
     print("-" * 32)
-    for word, score in sorted_scores[:10]:
+    for word, score in top_items:
         print(f"{word:<20} | {score:.4f}")
+
+    return top_items
