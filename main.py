@@ -12,10 +12,22 @@ from israel import vectorize_documents
 from load_dataset import load_dataset
 from test_movie_names_with_indices import movies
 from advanced_alg import extract_keywords
+from keyword_models import (
+    ADVANCED_DIR,
+    BASELINE_DIR,
+    load_advanced_model,
+    load_baseline_model,
+    predict_advanced_keywords,
+    predict_baseline_keywords,
+)
+from keyword_metrics import compute_micro_metrics, format_metrics
+from label_utils import keybert_tokens
 
 _cache_lock = threading.Lock()
 _dataset_cache = None
 _movie_cache = None
+_baseline_cache = None
+_advanced_cache = None
 
 
 class QueueWriter:
@@ -77,6 +89,36 @@ def _is_movie_cached():
         return _movie_cache is not None
 
 
+def _get_baseline_model():
+    global _baseline_cache
+    with _cache_lock:
+        cached = _baseline_cache
+    if cached is not None:
+        return cached
+
+    model = load_baseline_model(BASELINE_DIR)
+
+    with _cache_lock:
+        if _baseline_cache is None:
+            _baseline_cache = model
+        return _baseline_cache
+
+
+def _get_advanced_model():
+    global _advanced_cache
+    with _cache_lock:
+        cached = _advanced_cache
+    if cached is not None:
+        return cached
+
+    model = load_advanced_model(ADVANCED_DIR)
+
+    with _cache_lock:
+        if _advanced_cache is None:
+            _advanced_cache = model
+        return _advanced_cache
+
+
 def _parse_movie_list(movies_text):
     lines = []
     for line in movies_text.splitlines():
@@ -102,6 +144,13 @@ def _jaccard_score(items_a, items_b):
     if not set_a and not set_b:
         return None
     return len(set_a & set_b) / len(set_a | set_b)
+
+
+def _print_keyword_table(items):
+    print(f"{'Keyword':<20} | {'Score':<10}")
+    print("-" * 32)
+    for word, score in items:
+        print(f"{word:<20} | {score:.4f}")
 
 
 def run_gui():
@@ -194,21 +243,42 @@ def run_gui():
     ).grid(row=2, column=0, sticky="w")
     ttk.Radiobutton(
         left_panel,
-        text="KeyBERT (Advanced)",
+        text="KeyBERT (Silver)",
         value="keybert",
         variable=algorithm_var,
         style="Panel.TRadiobutton",
     ).grid(row=3, column=0, sticky="w")
     ttk.Radiobutton(
         left_panel,
-        text="Both",
-        value="both",
+        text="Baseline (ML)",
+        value="baseline",
         variable=algorithm_var,
         style="Panel.TRadiobutton",
     ).grid(row=4, column=0, sticky="w")
+    ttk.Radiobutton(
+        left_panel,
+        text="Transformer (Advanced)",
+        value="transformer",
+        variable=algorithm_var,
+        style="Panel.TRadiobutton",
+    ).grid(row=5, column=0, sticky="w")
+    ttk.Radiobutton(
+        left_panel,
+        text="TF-IDF + KeyBERT",
+        value="both",
+        variable=algorithm_var,
+        style="Panel.TRadiobutton",
+    ).grid(row=6, column=0, sticky="w")
+
+    ttk.Label(left_panel, text="Top N", style="Panel.TLabel").grid(
+        row=7, column=0, sticky="w", pady=(16, 4)
+    )
+    top_n_var = tk.StringVar(value="10")
+    top_n_entry = ttk.Entry(left_panel, textvariable=top_n_var, width=6)
+    top_n_entry.grid(row=8, column=0, sticky="w")
 
     ttk.Label(left_panel, text="Movie", style="Panel.TLabel").grid(
-        row=5, column=0, sticky="w", pady=(16, 4)
+        row=9, column=0, sticky="w", pady=(16, 4)
     )
 
     movie_var = tk.StringVar()
@@ -220,16 +290,16 @@ def run_gui():
         state="readonly",
         style="App.TCombobox",
     )
-    movie_combo.grid(row=6, column=0, sticky="ew")
+    movie_combo.grid(row=10, column=0, sticky="ew")
     if movie_list:
         movie_combo.current(0)
 
     ttk.Label(left_panel, text="Actions", style="Panel.TLabel").grid(
-        row=7, column=0, sticky="w", pady=(16, 4)
+        row=11, column=0, sticky="w", pady=(16, 4)
     )
 
     button_frame = ttk.Frame(left_panel, style="Panel.TFrame")
-    button_frame.grid(row=8, column=0, sticky="ew")
+    button_frame.grid(row=12, column=0, sticky="ew")
     button_frame.columnconfigure(1, weight=1)
 
     ttk.Label(right_panel, text="Output", style="Section.TLabel").grid(row=0, column=0, sticky="w")
@@ -249,7 +319,7 @@ def run_gui():
     output_scroll.grid(row=1, column=1, sticky="ns", pady=(10, 0))
     output_text.configure(yscrollcommand=output_scroll.set, state="disabled")
 
-    metrics_var = tk.StringVar(value="Jaccard (TF-IDF vs KeyBERT): N/A")
+    metrics_var = tk.StringVar(value="Metrics: N/A")
     metrics_label = ttk.Label(right_panel, textvariable=metrics_var, style="Panel.TLabel")
     metrics_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
@@ -304,7 +374,7 @@ def run_gui():
             return
         set_status("Done.")
 
-    def run_worker(algorithm, movie_index, movie_label):
+    def run_worker(algorithm, movie_index, movie_label, top_n):
         writer = QueueWriter(log_queue)
         try:
             with redirect_stdout(writer):
@@ -334,15 +404,31 @@ def run_gui():
 
                 tfidf_items = None
                 keybert_items = None
+                baseline_items = None
+                advanced_items = None
 
                 if algorithm in {"tfidf", "both"}:
                     print("TF-IDF Results:")
-                    tfidf_items = vectorize_documents(combined, top_n=10)
+                    tfidf_items = vectorize_documents(combined, top_n=top_n)
                     print("")
 
                 if algorithm in {"keybert", "both"}:
                     print("KeyBERT Results:")
-                    keybert_items = extract_keywords(movie_series[0], top_n=10)
+                    keybert_items = extract_keywords(movie_series[0], top_n=top_n)
+                    print("")
+
+                if algorithm == "baseline":
+                    print("Baseline Results:")
+                    baseline_model = _get_baseline_model()
+                    baseline_items = predict_baseline_keywords(processed, baseline_model, top_n=top_n)
+                    _print_keyword_table(baseline_items)
+                    print("")
+
+                if algorithm == "transformer":
+                    print("Transformer Results:")
+                    advanced_model = _get_advanced_model()
+                    advanced_items = predict_advanced_keywords(processed, advanced_model, top_n=top_n)
+                    _print_keyword_table(advanced_items)
                     print("")
 
                 if algorithm == "both":
@@ -351,6 +437,18 @@ def run_gui():
                         metrics_text = "Jaccard (TF-IDF vs KeyBERT): N/A"
                     else:
                         metrics_text = f"Jaccard (TF-IDF vs KeyBERT): {score:.3f}"
+                    root.after(0, lambda: set_metrics(metrics_text))
+
+                if algorithm in {"baseline", "transformer"}:
+                    label_tokens = keybert_tokens(processed, top_n=top_n)
+                    if algorithm == "baseline":
+                        pred_tokens = [word for word, _ in baseline_items or []]
+                        metrics = compute_micro_metrics(label_tokens, pred_tokens)
+                        metrics_text = format_metrics(metrics, label="Baseline vs KeyBERT")
+                    else:
+                        pred_tokens = [word for word, _ in advanced_items or []]
+                        metrics = compute_micro_metrics(label_tokens, pred_tokens)
+                        metrics_text = format_metrics(metrics, label="Advanced vs KeyBERT")
                     root.after(0, lambda: set_metrics(metrics_text))
 
             root.after(0, lambda: on_worker_done(None))
@@ -366,11 +464,22 @@ def run_gui():
             messagebox.showerror("Selection Required", "Please select a movie.")
             return
 
+        try:
+            top_n = int(top_n_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Top N", "Top N must be a whole number.")
+            return
+        if top_n < 1 or top_n > 50:
+            messagebox.showerror("Invalid Top N", "Top N must be between 1 and 50.")
+            return
+
         clear_output()
         if algorithm_var.get() == "both":
             set_metrics("Jaccard (TF-IDF vs KeyBERT): running...")
+        elif algorithm_var.get() in {"baseline", "transformer"}:
+            set_metrics("Metrics (vs KeyBERT): running...")
         else:
-            set_metrics("Jaccard (TF-IDF vs KeyBERT): N/A (run Both)")
+            set_metrics("Metrics: N/A")
         set_status("Running extraction...")
         run_button.config(state="disabled")
         clear_button.config(state="disabled")
@@ -378,7 +487,7 @@ def run_gui():
 
         worker = threading.Thread(
             target=run_worker,
-            args=(algorithm_var.get(), movie_index, movie_line),
+            args=(algorithm_var.get(), movie_index, movie_line, top_n),
             daemon=True,
         )
         worker.start()

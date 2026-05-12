@@ -6,7 +6,7 @@ from keybert import KeyBERT
 kw_model = KeyBERT(model='all-MiniLM-L6-v2')
 
 
-def extract_keywords(text, top_n=10):
+def extract_keywords(text, top_n=10, show_table=True):
     # 2. Extract keywords
     # We use the model to extract keywords from the document.
     # top_n specifies how many keywords we want to extract.
@@ -16,10 +16,10 @@ def extract_keywords(text, top_n=10):
         top_n=top_n,
     )
     
-    # Human-readable printing
-    print(f"{'Keyword':<20} | {'Score':<10}")
-    print("-" * 32)
-    for word, score in keywords:
-        print(f"{word:<20} | {score:.4f}")
+    if show_table:
+        print(f"{'Keyword':<20} | {'Score':<10}")
+        print("-" * 32)
+        for word, score in keywords:
+            print(f"{word:<20} | {score:.4f}")
 
     return keywords
